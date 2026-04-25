@@ -31,62 +31,21 @@ app.post("/location", (req, res) => {
 });
 
 /* =========================
-   DISTANCE CALCULATION
-========================= */
-function getDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-
-  const a =
-    Math.sin(dLat/2) ** 2 +
-    Math.cos(lat1 * Math.PI/180) *
-    Math.cos(lat2 * Math.PI/180) *
-    Math.sin(dLon/2) ** 2;
-
-  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
-}
-
-/* =========================
-   BOOK RIDE (SMART MATCHING)
+   BOOK RIDE (TEST MODE)
 ========================= */
 app.post("/book", (req, res) => {
 
   const { pickup, dropoff, pickupCoords, price } = req.body;
 
-  let nearbyDrivers = [];
-
-  if (pickupCoords) {
-    // find nearby drivers (within 10km)
-    for (let id in drivers) {
-      const d = getDistance(
-        pickupCoords[0],
-        pickupCoords[1],
-        drivers[id].lat,
-        drivers[id].lng
-      );
-
-      if (d <= 10) {
-        nearbyDrivers.push({
-          driverId: id,
-          distance: d
-        });
-      }
-    }
-
-    // sort by distance
-    nearbyDrivers.sort((a, b) => a.distance - b.distance);
-  }
-
-  // take top 3 drivers (Uber-style)
-  const assignedDrivers = nearbyDrivers.slice(0, 3).map(d => d.driverId);
+  // 🔥 TEST MODE: assign ALL drivers
+  const assignedDrivers = Object.keys(drivers);
 
   const job = {
     id: Date.now().toString(),
     pickup,
     dropoff,
     pickupCoords,
-    assignedDrivers, // 🔥 multiple drivers
+    assignedDrivers,
     acceptedDriver: null,
     price: price || 0,
     status: "open",
@@ -130,7 +89,7 @@ app.post("/accept", (req, res) => {
     return res.status(403).json({ error: "Not eligible" });
   }
 
-  // lock job to first driver
+  // 🔥 lock job to first driver
   job.acceptedDriver = driverId;
   job.status = "accepted";
 
@@ -150,7 +109,7 @@ app.post("/decline", (req, res) => {
     return res.status(404).json({ error: "Job not found" });
   }
 
-  // remove driver from pool
+  // remove driver from job pool
   job.assignedDrivers = job.assignedDrivers.filter(
     id => id !== driverId
   );
@@ -177,7 +136,7 @@ app.post("/complete", (req, res) => {
 });
 
 /* =========================
-   DRIVER LOCATION GET
+   GET DRIVER LOCATION
 ========================= */
 app.get("/driver/:id", (req, res) => {
 
@@ -189,13 +148,20 @@ app.get("/driver/:id", (req, res) => {
 });
 
 /* =========================
-   DEBUG ROUTE (IMPORTANT)
+   DEBUG ROUTE
 ========================= */
 app.get("/debug", (req, res) => {
   res.json({
-    jobs,
-    drivers
+    drivers,
+    jobs
   });
+});
+
+/* =========================
+   ROOT CHECK
+========================= */
+app.get("/", (req, res) => {
+  res.send("RideFlow Backend Running (TEST MODE) 🚀");
 });
 
 /* =========================
