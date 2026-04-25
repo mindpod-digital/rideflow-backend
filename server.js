@@ -5,28 +5,37 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+/* =========================
+   IN-MEMORY STORAGE
+========================= */
 let jobs = [];
 let drivers = {};
 
 /* =========================
-   UPDATE DRIVER LOCATION
+   DRIVER LOCATION UPDATE
 ========================= */
 app.post("/location", (req, res) => {
   const { driverId, lat, lng } = req.body;
 
+  if (!driverId || lat == null || lng == null) {
+    return res.status(400).json({ error: "Missing driver data" });
+  }
+
   drivers[driverId] = {
-    lat,
-    lng
+    lat: parseFloat(lat),
+    lng: parseFloat(lng),
+    lastUpdated: Date.now()
   };
 
   res.json({ success: true });
 });
 
 /* =========================
-   FIND NEAREST DRIVER
+   DISTANCE (HAVERSINE)
 ========================= */
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
+
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
 
@@ -40,20 +49,22 @@ function getDistance(lat1, lon1, lat2, lon2) {
 }
 
 /* =========================
-   BOOK + AUTO MATCH
+   BOOK RIDE + MATCH DRIVER
 ========================= */
 app.post("/book", (req, res) => {
 
-  const { pickup, dropoff, pickupCoords } = req.body;
+  const { pickup, dropoff, pickupCoords, price } = req.body;
 
   if (!pickupCoords) {
-    return res.json({ error: "Missing coordinates" });
+    return res.status(400).json({ error: "Missing pickup coordinates" });
   }
 
   let nearestDriver = null;
   let minDistance = Infinity;
 
+  // find closest driver
   for (let id in drivers) {
+
     const d = getDistance(
       pickupCoords[0],
       pickupCoords[1],
@@ -71,8 +82,12 @@ app.post("/book", (req, res) => {
     id: Date.now().toString(),
     pickup,
     dropoff,
+    pickupCoords,
     assignedDriver: nearestDriver,
-    distance: minDistance
+    distance: minDistance,
+    price: price || 0,
+    status: nearestDriver ? "assigned" : "unassigned",
+    createdAt: Date.now()
   };
 
   jobs.push(job);
@@ -81,14 +96,98 @@ app.post("/book", (req, res) => {
 });
 
 /* =========================
-   GET DRIVER JOBS
+   GET JOBS FOR DRIVER
 ========================= */
 app.get("/jobs/:driverId", (req, res) => {
+
   const driverId = req.params.driverId;
 
-  const assigned = jobs.filter(j => j.assignedDriver === driverId);
+  const assignedJobs = jobs.filter(
+    j => j.assignedDriver === driverId && j.status !== "completed"
+  );
 
-  res.json(assigned);
+  res.json(assignedJobs);
+});
+
+/* =========================
+   ACCEPT JOB
+========================= */
+app.post("/accept", (req, res) => {
+
+  const { jobId, driverId } = req.body;
+
+  const job = jobs.find(j => j.id === jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  if (job.assignedDriver !== driverId) {
+    return res.status(403).json({ error: "Not your job" });
+  }
+
+  job.status = "accepted";
+
+  res.json({ success: true });
+});
+
+/* =========================
+   DECLINE JOB
+========================= */
+app.post("/decline", (req, res) => {
+
+  const { jobId } = req.body;
+
+  const job = jobs.find(j => j.id === jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  // release job back to pool
+  job.assignedDriver = null;
+  job.status = "open";
+
+  res.json({ success: true });
+});
+
+/* =========================
+   COMPLETE JOB
+========================= */
+app.post("/complete", (req, res) => {
+
+  const { jobId } = req.body;
+
+  const job = jobs.find(j => j.id === jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  job.status = "completed";
+
+  res.json({ success: true });
+});
+
+/* =========================
+   GET DRIVER LOCATION
+========================= */
+app.get("/driver/:id", (req, res) => {
+
+  const driver = drivers[req.params.id];
+
+  if (!driver) {
+    return res.json({});
+  }
+
+  res.json(driver);
+});
+
+/* =========================
+   HEALTH CHECK
+========================= */
+app.get("/", (req, res) => {
+  res.send("RideFlow Backend Running 🚀");
 });
 
 /* =========================
@@ -97,5 +196,5 @@ app.get("/jobs/:driverId", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Running on " + PORT);
+  console.log("Running on port " + PORT);
 });
