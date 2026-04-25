@@ -6,6 +6,17 @@ app.use(cors());
 app.use(express.json());
 
 /* =========================
+   OPTIONAL: STRIPE SETUP
+========================= */
+let stripe = null;
+try {
+  const Stripe = require("stripe");
+  stripe = new Stripe("sk_test_YOUR_SECRET_KEY"); // 🔥 replace later
+} catch (e) {
+  console.log("Stripe not installed (ok for testing)");
+}
+
+/* =========================
    STORAGE
 ========================= */
 let jobs = [];
@@ -31,7 +42,7 @@ app.post("/location", (req, res) => {
 });
 
 /* =========================
-   BOOK RIDE (TEST MODE)
+   BOOK RIDE (TEST FRIENDLY)
 ========================= */
 app.post("/book", (req, res) => {
 
@@ -47,7 +58,7 @@ app.post("/book", (req, res) => {
     pickupCoords,
     assignedDrivers,
     acceptedDriver: null,
-    price: price || 0,
+    price: parseFloat(price) || 10,
     status: "open",
     createdAt: Date.now()
   };
@@ -64,32 +75,35 @@ app.get("/jobs/:driverId", (req, res) => {
 
   const driverId = req.params.driverId;
 
-  const visibleJobs = jobs.filter(j =>
-    j.status === "open" &&
-    j.assignedDrivers.includes(driverId)
-  );
+  const visibleJobs = jobs.filter(job => {
+
+    // 🔒 if accepted → only assigned driver sees it
+    if (job.status === "accepted") {
+      return job.acceptedDriver === driverId;
+    }
+
+    // open jobs → visible to assigned drivers
+    return job.status === "open" &&
+           job.assignedDrivers.includes(driverId);
+  });
 
   res.json(visibleJobs);
 });
 
 /* =========================
-   ACCEPT JOB
+   ACCEPT JOB (LOCK)
 ========================= */
 app.post("/accept", (req, res) => {
 
   const { jobId, driverId } = req.body;
 
   const job = jobs.find(j => j.id === jobId);
+  if (!job) return res.status(404).json({ error: "Job not found" });
 
-  if (!job) {
-    return res.status(404).json({ error: "Job not found" });
+  if (job.status !== "open") {
+    return res.status(400).json({ error: "Already taken" });
   }
 
-  if (!job.assignedDrivers.includes(driverId)) {
-    return res.status(403).json({ error: "Not eligible" });
-  }
-
-  // 🔥 lock job to first driver
   job.acceptedDriver = driverId;
   job.status = "accepted";
 
@@ -104,12 +118,8 @@ app.post("/decline", (req, res) => {
   const { jobId, driverId } = req.body;
 
   const job = jobs.find(j => j.id === jobId);
+  if (!job) return res.status(404).json({ error: "Job not found" });
 
-  if (!job) {
-    return res.status(404).json({ error: "Job not found" });
-  }
-
-  // remove driver from job pool
   job.assignedDrivers = job.assignedDrivers.filter(
     id => id !== driverId
   );
@@ -118,25 +128,40 @@ app.post("/decline", (req, res) => {
 });
 
 /* =========================
-   COMPLETE JOB
+   COMPLETE JOB + PAYMENT
 ========================= */
-app.post("/complete", (req, res) => {
+app.post("/complete", async (req, res) => {
 
   const { jobId } = req.body;
 
   const job = jobs.find(j => j.id === jobId);
-
-  if (!job) {
-    return res.status(404).json({ error: "Job not found" });
-  }
+  if (!job) return res.status(404).json({ error: "Job not found" });
 
   job.status = "completed";
+
+  // 💳 Stripe payment (optional)
+  if (stripe) {
+    try {
+      const amount = Math.round(job.price * 100);
+
+      await stripe.paymentIntents.create({
+        amount,
+        currency: "gbp",
+        application_fee_amount: Math.round(amount * 0.1)
+        // 🔥 add transfer_data when you onboard drivers
+      });
+
+      console.log("Payment processed");
+    } catch (err) {
+      console.log("Stripe error:", err.message);
+    }
+  }
 
   res.json({ success: true });
 });
 
 /* =========================
-   GET DRIVER LOCATION
+   DRIVER LOCATION GET
 ========================= */
 app.get("/driver/:id", (req, res) => {
 
@@ -158,10 +183,10 @@ app.get("/debug", (req, res) => {
 });
 
 /* =========================
-   ROOT CHECK
+   ROOT
 ========================= */
 app.get("/", (req, res) => {
-  res.send("RideFlow Backend Running (TEST MODE) 🚀");
+  res.send("RideFlow Backend Running 🚀");
 });
 
 /* =========================
