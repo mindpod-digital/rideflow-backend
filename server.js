@@ -6,7 +6,7 @@ app.use(cors());
 app.use(express.json());
 
 /* =========================
-   IN-MEMORY STORAGE
+   STORAGE
 ========================= */
 let jobs = [];
 let drivers = {};
@@ -17,76 +17,79 @@ let drivers = {};
 app.post("/location", (req, res) => {
   const { driverId, lat, lng } = req.body;
 
-  if (!driverId || lat == null || lng == null) {
-    return res.status(400).json({ error: "Missing driver data" });
+  if (!driverId) {
+    return res.status(400).json({ error: "Missing driverId" });
   }
 
   drivers[driverId] = {
     lat: parseFloat(lat),
     lng: parseFloat(lng),
-    lastUpdated: Date.now()
+    updatedAt: Date.now()
   };
 
   res.json({ success: true });
 });
 
 /* =========================
-   DISTANCE (HAVERSINE)
+   DISTANCE CALCULATION
 ========================= */
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
-
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
 
   const a =
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.sin(dLat/2) ** 2 +
     Math.cos(lat1 * Math.PI/180) *
     Math.cos(lat2 * Math.PI/180) *
-    Math.sin(dLon/2) * Math.sin(dLon/2);
+    Math.sin(dLon/2) ** 2;
 
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
 }
 
 /* =========================
-   BOOK RIDE + MATCH DRIVER
+   BOOK RIDE (SMART MATCHING)
 ========================= */
 app.post("/book", (req, res) => {
 
   const { pickup, dropoff, pickupCoords, price } = req.body;
 
-  if (!pickupCoords) {
-    return res.status(400).json({ error: "Missing pickup coordinates" });
-  }
+  let nearbyDrivers = [];
 
-  let nearestDriver = null;
-  let minDistance = Infinity;
+  if (pickupCoords) {
+    // find nearby drivers (within 10km)
+    for (let id in drivers) {
+      const d = getDistance(
+        pickupCoords[0],
+        pickupCoords[1],
+        drivers[id].lat,
+        drivers[id].lng
+      );
 
-  // find closest driver
-  for (let id in drivers) {
-
-    const d = getDistance(
-      pickupCoords[0],
-      pickupCoords[1],
-      drivers[id].lat,
-      drivers[id].lng
-    );
-
-    if (d < minDistance) {
-      minDistance = d;
-      nearestDriver = id;
+      if (d <= 10) {
+        nearbyDrivers.push({
+          driverId: id,
+          distance: d
+        });
+      }
     }
+
+    // sort by distance
+    nearbyDrivers.sort((a, b) => a.distance - b.distance);
   }
+
+  // take top 3 drivers (Uber-style)
+  const assignedDrivers = nearbyDrivers.slice(0, 3).map(d => d.driverId);
 
   const job = {
     id: Date.now().toString(),
     pickup,
     dropoff,
     pickupCoords,
-    assignedDriver: nearestDriver,
-    distance: minDistance,
+    assignedDrivers, // 🔥 multiple drivers
+    acceptedDriver: null,
     price: price || 0,
-    status: nearestDriver ? "assigned" : "unassigned",
+    status: "open",
     createdAt: Date.now()
   };
 
@@ -102,11 +105,12 @@ app.get("/jobs/:driverId", (req, res) => {
 
   const driverId = req.params.driverId;
 
-  const assignedJobs = jobs.filter(
-    j => j.assignedDriver === driverId && j.status !== "completed"
+  const visibleJobs = jobs.filter(j =>
+    j.status === "open" &&
+    j.assignedDrivers.includes(driverId)
   );
 
-  res.json(assignedJobs);
+  res.json(visibleJobs);
 });
 
 /* =========================
@@ -122,10 +126,12 @@ app.post("/accept", (req, res) => {
     return res.status(404).json({ error: "Job not found" });
   }
 
-  if (job.assignedDriver !== driverId) {
-    return res.status(403).json({ error: "Not your job" });
+  if (!job.assignedDrivers.includes(driverId)) {
+    return res.status(403).json({ error: "Not eligible" });
   }
 
+  // lock job to first driver
+  job.acceptedDriver = driverId;
   job.status = "accepted";
 
   res.json({ success: true });
@@ -136,7 +142,7 @@ app.post("/accept", (req, res) => {
 ========================= */
 app.post("/decline", (req, res) => {
 
-  const { jobId } = req.body;
+  const { jobId, driverId } = req.body;
 
   const job = jobs.find(j => j.id === jobId);
 
@@ -144,9 +150,10 @@ app.post("/decline", (req, res) => {
     return res.status(404).json({ error: "Job not found" });
   }
 
-  // release job back to pool
-  job.assignedDriver = null;
-  job.status = "open";
+  // remove driver from pool
+  job.assignedDrivers = job.assignedDrivers.filter(
+    id => id !== driverId
+  );
 
   res.json({ success: true });
 });
@@ -170,24 +177,25 @@ app.post("/complete", (req, res) => {
 });
 
 /* =========================
-   GET DRIVER LOCATION
+   DRIVER LOCATION GET
 ========================= */
 app.get("/driver/:id", (req, res) => {
 
   const driver = drivers[req.params.id];
 
-  if (!driver) {
-    return res.json({});
-  }
+  if (!driver) return res.json({});
 
   res.json(driver);
 });
 
 /* =========================
-   HEALTH CHECK
+   DEBUG ROUTE (IMPORTANT)
 ========================= */
-app.get("/", (req, res) => {
-  res.send("RideFlow Backend Running 🚀");
+app.get("/debug", (req, res) => {
+  res.json({
+    jobs,
+    drivers
+  });
 });
 
 /* =========================
