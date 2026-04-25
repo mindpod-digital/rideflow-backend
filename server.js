@@ -5,23 +5,74 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* =========================
-   DATA STORAGE (TEMP)
-========================= */
 let jobs = [];
 let drivers = {};
 
 /* =========================
-   CREATE RIDE
+   UPDATE DRIVER LOCATION
+========================= */
+app.post("/location", (req, res) => {
+  const { driverId, lat, lng } = req.body;
+
+  drivers[driverId] = {
+    lat,
+    lng
+  };
+
+  res.json({ success: true });
+});
+
+/* =========================
+   FIND NEAREST DRIVER
+========================= */
+function getDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI/180) *
+    Math.cos(lat2 * Math.PI/180) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+}
+
+/* =========================
+   BOOK + AUTO MATCH
 ========================= */
 app.post("/book", (req, res) => {
-  const { pickup, dropoff } = req.body;
+
+  const { pickup, dropoff, pickupCoords } = req.body;
+
+  if (!pickupCoords) {
+    return res.json({ error: "Missing coordinates" });
+  }
+
+  let nearestDriver = null;
+  let minDistance = Infinity;
+
+  for (let id in drivers) {
+    const d = getDistance(
+      pickupCoords[0],
+      pickupCoords[1],
+      drivers[id].lat,
+      drivers[id].lng
+    );
+
+    if (d < minDistance) {
+      minDistance = d;
+      nearestDriver = id;
+    }
+  }
 
   const job = {
     id: Date.now().toString(),
     pickup,
     dropoff,
-    status: "open"
+    assignedDriver: nearestDriver,
+    distance: minDistance
   };
 
   jobs.push(job);
@@ -30,63 +81,21 @@ app.post("/book", (req, res) => {
 });
 
 /* =========================
-   GET AVAILABLE JOBS
+   GET DRIVER JOBS
 ========================= */
-app.get("/jobs", (req, res) => {
-  res.json(jobs.filter(j => j.status === "open"));
+app.get("/jobs/:driverId", (req, res) => {
+  const driverId = req.params.driverId;
+
+  const assigned = jobs.filter(j => j.assignedDriver === driverId);
+
+  res.json(assigned);
 });
 
 /* =========================
-   ACCEPT JOB
-========================= */
-app.post("/accept", (req, res) => {
-  const { jobId } = req.body;
-
-  const job = jobs.find(j => j.id === jobId);
-
-  if (job) {
-    job.status = "assigned";
-  }
-
-  res.json({ success: true });
-});
-
-/* =========================
-   DRIVER LOCATION UPDATE
-========================= */
-app.post("/location", (req, res) => {
-  const { driverId, lat, lng } = req.body;
-
-  drivers[driverId] = { lat, lng };
-
-  res.json({ success: true });
-});
-
-/* =========================
-   GET DRIVER LOCATION
-========================= */
-app.get("/driver/:id", (req, res) => {
-  const driver = drivers[req.params.id];
-
-  if (!driver) {
-    return res.json({});
-  }
-
-  res.json(driver);
-});
-
-/* =========================
-   ROOT (OPTIONAL)
-========================= */
-app.get("/", (req, res) => {
-  res.send("RideFlow Backend Running 🚀");
-});
-
-/* =========================
-   START SERVER (IMPORTANT)
+   START SERVER
 ========================= */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Running on port " + PORT);
+  console.log("Running on " + PORT);
 });
